@@ -3,85 +3,110 @@ session_start();
 
 include 'config.php';
 include 'database/database.php';
+include 'moderation.php';
+include 'incluides/csrf.php';
 
-$error = "";
+csrf_check();
+
+$id = $_GET["id"] ?? "";
+
+$newsFile = "data/news.txt";
+
+if (!file_exists($newsFile)) {
+    die("No hay noticias.");
+}
+
+$news = json_decode(file_get_contents($newsFile), true);
+
+if (!isset($news[$id])) {
+    die("Noticia no encontrada.");
+}
+
+$item = $news[$id];
 
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
-    $name = trim($_POST["name"]);
-    $email = strtolower(trim($_POST["email"]));
-    $password = $_POST["password"];
+    if (!isset($_SESSION["user"])) {
+        die("Debes iniciar sesión para comentar.");
+    }
 
-    if ($name === "" || $email === "" || $password === "") {
-        $error = "Completa todos los campos.";
-    } else {
-        $stmt = $pdo->prepare("SELECT id FROM users WHERE email = ?");
-        $stmt->execute([$email]);
+    $message = trim($_POST["message"] ?? "");
 
-        if ($stmt->fetch()) {
-            $error = "Ese correo ya está registrado.";
-        } else {
-            $verified = $email === $officialOwnerEmail ? 1 : 0;
-            $role = $email === $officialOwnerEmail ? "Owner" : "Usuario";
-            $immune = $email === $officialOwnerEmail ? 1 : 0;
+    if (($_SESSION["user"]["banned"] ?? false) === true) {
+        die('Tu cuenta está baneada. <a href="support.php?type=Apelar baneo">Apelar baneo</a>');
+    }
 
-            $stmt = $pdo->prepare("
-                INSERT INTO users 
-                (name, email, password, role, verified, warnings, suspended_until, banned, immune, created_at)
-                VALUES 
-                (?, ?, ?, ?, ?, 0, NULL, 0, ?, ?)
-            ");
+    if (!empty($_SESSION["user"]["suspended_until"]) && strtotime($_SESSION["user"]["suspended_until"]) > time()) {
+        die('Tu cuenta está suspendida temporalmente. <a href="support.php?type=Apelar suspensión">Apelar suspensión</a>');
+    }
 
-            $stmt->execute([
-                htmlspecialchars($name),
-                $email,
-                password_hash($password, PASSWORD_DEFAULT),
-                $role,
-                $verified,
-                $immune,
-                date("d/m/Y H:i")
-            ]);
+    if (stripos($message, "testban") !== false) {
+        addWarning($_SESSION["user"]["email"], "Prueba de moderación");
+        die("Comentario bloqueado por moderación. Advertencia agregada.");
+    }
 
-            $_SESSION["user"] = [
-                "name" => htmlspecialchars($name),
-                "email" => $email,
-                "role" => $role,
-                "verified" => (bool)$verified,
-                "warnings" => 0,
-                "suspended_until" => null,
-                "banned" => false,
-                "immune" => (bool)$immune,
-                "created_at" => date("d/m/Y H:i")
-            ];
+    if ($message !== "") {
+        $stmt = $pdo->prepare("
+            INSERT INTO comments (news_id, user_email, user_name, message)
+            VALUES (?, ?, ?, ?)
+        ");
 
-            header("Location: index.php");
-            exit;
-        }
+        $stmt->execute([
+            $id,
+            $_SESSION["user"]["email"],
+            $_SESSION["user"]["name"],
+            $message
+        ]);
+
+        header("Location: news_detail.php?id=" . urlencode($id));
+        exit;
     }
 }
+
+$stmt = $pdo->prepare("SELECT * FROM comments WHERE news_id = ? ORDER BY id DESC");
+$stmt->execute([$id]);
+$commentsList = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+$pageTitle = htmlspecialchars($item["title"]) . " - " . $siteName;
+include 'incluides/header.php';
 ?>
 
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <title>Registrarse</title>
-    <link rel="icon" type="image/svg+xml" href="assets/logos/launcher.svg">
-    <link rel="stylesheet" href="style.css">
-</head>
-<body>
+<a class="volver" href="news.php">← Volver a noticias</a>
 
-<a class="volver" href="index.php">← Volver</a>
+<div class="version-card">
+    <h1><?php echo htmlspecialchars($item["title"]); ?></h1>
+    <p><?php echo htmlspecialchars($item["content"]); ?></p>
+</div>
 
-<h1>Crear cuenta</h1>
+<h2>Comentarios</h2>
+
+<?php if(isset($_SESSION["user"])): ?>
 
 <form method="POST" class="comment-form">
-    <input type="text" name="name" placeholder="Nombre de usuario" required>
-    <input type="email" name="email" placeholder="Correo" required>
-    <input type="password" name="password" placeholder="Contraseña" required>
-    <button type="submit">Registrarme</button>
+    <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
+    <textarea name="message" placeholder="Escribe un comentario..." required></textarea>
+    <button type="submit">Enviar comentario</button>
 </form>
 
-<p><?php echo $error; ?></p>
+<?php else: ?>
 
-</body>
-</html>
+<div class="safe-box">
+    <p>Debes iniciar sesión para comentar.</p>
+    <a class="download-btn" href="login.php">Iniciar sesión</a>
+    <a class="download-btn" href="register.php">Crear cuenta</a>
+</div>
+
+<?php endif; ?>
+
+<?php if(empty($commentsList)): ?>
+    <p>No hay comentarios todavía.</p>
+<?php endif; ?>
+
+<?php foreach($commentsList as $comment): ?>
+    <div class="version-card">
+        <h3><?php echo htmlspecialchars($comment["user_name"]); ?></h3>
+        <p><?php echo htmlspecialchars($comment["message"]); ?></p>
+        <small><?php echo htmlspecialchars($comment["created_at"]); ?></small>
+    </div>
+<?php endforeach; ?>
+
+<?php include 'incluides/footer.php'; ?>
