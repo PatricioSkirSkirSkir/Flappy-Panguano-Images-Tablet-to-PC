@@ -1,112 +1,91 @@
-<?php
-session_start();
+<script>
+const player = document.getElementById("player");
+const album = document.getElementById("album");
+const progressBar = document.getElementById("progressBar");
+const currentTimeText = document.getElementById("currentTime");
+const durationTimeText = document.getElementById("durationTime");
 
-include 'config.php';
-include 'database/database.php';
-include 'moderation.php';
-include 'incluides/csrf.php';
+let wasPlaying = false;
+let isSeeking = false;
 
-csrf_check();
-
-$id = $_GET["id"] ?? "";
-
-$newsFile = "data/news.txt";
-
-if (!file_exists($newsFile)) {
-    die("No hay noticias.");
+function playMusic(){
+    player.play();
+    album.classList.add("spinning");
 }
 
-$news = json_decode(file_get_contents($newsFile), true);
-
-if (!isset($news[$id])) {
-    die("Noticia no encontrada.");
+function pauseMusic(){
+    player.pause();
+    album.classList.remove("spinning");
 }
 
-$item = $news[$id];
+function formatTime(seconds){
+    if (isNaN(seconds)) return "0:00";
 
-if ($_SERVER["REQUEST_METHOD"] === "POST") {
-    if (!isset($_SESSION["user"])) {
-        die("Debes iniciar sesión para comentar.");
-    }
+    const min = Math.floor(seconds / 60);
+    const sec = Math.floor(seconds % 60).toString().padStart(2, "0");
 
-    $message = trim($_POST["message"] ?? "");
+    return `${min}:${sec}`;
+}
 
-    if (($_SESSION["user"]["banned"] ?? false) === true) {
-        die('Tu cuenta está baneada. <a href="support.php?type=Apelar baneo">Apelar baneo</a>');
-    }
-
-    if (!empty($_SESSION["user"]["suspended_until"]) && strtotime($_SESSION["user"]["suspended_until"]) > time()) {
-        die('Tu cuenta está suspendida temporalmente. <a href="support.php?type=Apelar suspensión">Apelar suspensión</a>');
-    }
-
-    if (stripos($message, "testban") !== false) {
-        addWarning($_SESSION["user"]["email"], "Prueba de moderación");
-        die("Comentario bloqueado por moderación. Advertencia agregada.");
-    }
-
-    if ($message !== "") {
-        $stmt = $pdo->prepare("
-            INSERT INTO comments (news_id, user_email, user_name, message)
-            VALUES (?, ?, ?, ?)
-        ");
-
-        $stmt->execute([
-            $id,
-            $_SESSION["user"]["email"],
-            $_SESSION["user"]["name"],
-            $message
-        ]);
-
-        header("Location: news_detail.php?id=" . urlencode($id));
-        exit;
+function setupDuration(){
+    if(player.duration){
+        durationTimeText.textContent = formatTime(player.duration);
     }
 }
 
-$stmt = $pdo->prepare("SELECT * FROM comments WHERE news_id = ? ORDER BY id DESC");
-$stmt->execute([$id]);
-$commentsList = $stmt->fetchAll(PDO::FETCH_ASSOC);
+function startSeeking(){
+    isSeeking = true;
+    wasPlaying = !player.paused;
+    player.pause();
+    album.classList.remove("spinning");
+}
 
-$pageTitle = htmlspecialchars($item["title"]) . " - " . $siteName;
-include 'incluides/header.php';
-?>
+function finishSeeking(){
+    const percent = Number(progressBar.value);
 
-<a class="volver" href="news.php">← Volver a noticias</a>
+    if(player.duration){
+        player.currentTime = (percent / 100) * player.duration;
+    }
 
-<div class="version-card">
-    <h1><?php echo htmlspecialchars($item["title"]); ?></h1>
-    <p><?php echo htmlspecialchars($item["content"]); ?></p>
-</div>
+    isSeeking = false;
 
-<h2>Comentarios</h2>
+    if(wasPlaying){
+        player.play();
+        album.classList.add("spinning");
+    }
+}
 
-<?php if(isset($_SESSION["user"])): ?>
+player.addEventListener("loadedmetadata", setupDuration);
 
-<form method="POST" class="comment-form">
-    <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
-    <textarea name="message" placeholder="Escribe un comentario..." required></textarea>
-    <button type="submit">Enviar comentario</button>
-</form>
+progressBar.addEventListener("pointerdown", startSeeking);
+progressBar.addEventListener("touchstart", startSeeking);
 
-<?php else: ?>
+progressBar.addEventListener("input", () => {
+    if(player.duration){
+        const percent = Number(progressBar.value);
+        const previewTime = (percent / 100) * player.duration;
+        currentTimeText.textContent = formatTime(previewTime);
+    }
+});
 
-<div class="safe-box">
-    <p>Debes iniciar sesión para comentar.</p>
-    <a class="download-btn" href="login.php">Iniciar sesión</a>
-    <a class="download-btn" href="register.php">Crear cuenta</a>
-</div>
+progressBar.addEventListener("change", finishSeeking);
+progressBar.addEventListener("pointerup", finishSeeking);
+progressBar.addEventListener("touchend", finishSeeking);
 
-<?php endif; ?>
+player.addEventListener("timeupdate", () => {
+    if(!isSeeking && player.duration){
+        progressBar.value = (player.currentTime / player.duration) * 100;
+        currentTimeText.textContent = formatTime(player.currentTime);
+    }
+});
 
-<?php if(empty($commentsList)): ?>
-    <p>No hay comentarios todavía.</p>
-<?php endif; ?>
+player.addEventListener("ended", () => {
+    album.classList.remove("spinning");
+    progressBar.value = 0;
+    currentTimeText.textContent = "0:00";
+});
 
-<?php foreach($commentsList as $comment): ?>
-    <div class="version-card">
-        <h3><?php echo htmlspecialchars($comment["user_name"]); ?></h3>
-        <p><?php echo htmlspecialchars($comment["message"]); ?></p>
-        <small><?php echo htmlspecialchars($comment["created_at"]); ?></small>
-    </div>
-<?php endforeach; ?>
-
-<?php include 'incluides/footer.php'; ?>
+if(player.readyState >= 1){
+    setupDuration();
+}
+</script>
